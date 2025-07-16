@@ -11,9 +11,9 @@ client = OpenAI()
 
 # Sample pizza menu
 menu = {
-    "pizzas": ["Margherita", "Pepperoni", "Vegan Delight"],
-    "toppings": ["Olives", "Mushrooms", "Onions", "Extra Cheese"],
-    "extras": ["Coke", "Garlic Bread"]
+    "pizzas": ["Margherita", "Pepperoni", "Vegan Delight", "BBQ Chicken", "Four Cheese", "Spicy Veggie", "Hawaiian", "Meat Feast", "Buffalo Chicken", "Pesto Veggie", "Four Seasons"],
+    "toppings": ["Olives", "Mushrooms", "Onions", "Extra Cheese", "Jalapenos", "Spinach", "Pineapple", "Basil", "Garlic", "Bell Peppers"],
+    "extras": ["Coke", "Garlic Bread", "Water", "Iced Tea", "Salad", "Brownie", "Cheesy Sticks", "Wings", "Fries", "Sparkling Water"]
 }
 
 # Updated system prompt
@@ -23,11 +23,12 @@ You're PizzaPal 🍕 — the friendliest, funniest, most flavorful pizza-orderin
 Your job is to help the user place a delicious pizza order, but with style and sass. Speak like a happy chef excited to serve. Use emojis, make pizza puns, and sprinkle in some personality, but **always collect the order data step-by-step**.
 
 🎯 Here's the plan:
-1. Ask what pizza they'd like from this menu: {menu['pizzas']}.
-2. Offer tasty toppings from this list: {menu['toppings']}.
-3. Suggest extras like drinks or sides: {menu['extras']}.
+1. Ask what pizza they'd like from this menu: {menu['pizzas']}. Give them the full menu options in order to choose.
+2. Offer tasty toppings from this list: {menu['toppings']}. Give them the full menu toppings options in order to choose.
+3. Suggest extras like drinks or sides: {menu['extras']}. Give them the full menu extras in order to choose.
 4. Ask about any dietary notes (vegan, halal, allergies).
-5. Get their delivery address.
+5. Get their delivery address. You must NOT finalize the order unless you have a full address
+
 
 🍕 Once everything is collected, respond ONLY with a JSON object like this:
 
@@ -40,8 +41,10 @@ Your job is to help the user place a delicious pizza order, but with style and s
 }}
 
 ⚠️ VERY IMPORTANT:
+- After the first message, show all the menu options.
 - Be chatty and fun throughout the ordering process!
 - But once the order is complete, stop joking and ONLY output the JSON with no extra text.
+- ONLY accept orders for items on the menu. If a user requests something not listed, politely inform them it's not available and suggest alternatives.
 """
 
 # Dialog history
@@ -65,7 +68,6 @@ def extract_json(text):
 # Chat function
 def chat_with_agent(user_text):
     global chat_history, order_complete
-
     chat_history.append({"role": "user", "content": user_text})
     messages = [{"role": "system", "content": system_prompt}] + chat_history
 

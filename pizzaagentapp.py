@@ -9,6 +9,9 @@ import re
 load_dotenv()
 client = OpenAI()  
 
+# Global variable to store the order (simpler approach)
+CURRENT_ORDER = {"status": "No order completed yet. Keep chatting with PizzaPal to place your order!"}
+
 # Detailed pizza menu with prices
 menu = {
     "pizzas": [
@@ -106,10 +109,6 @@ Your job is to help the user place a delicious pizza order, but with style and s
 - But once the order is confirmed, stop joking and ONLY output the JSON with no extra text.
 """
 
-# Global variables to track state
-order_complete = False
-final_order_json = None
-
 # Helper to extract JSON from assistant reply
 def extract_json(text):
     pattern = r"```(?:json)?(.*?)```|({.*?})"
@@ -123,6 +122,61 @@ def extract_json(text):
     if text.strip().startswith("{") and text.strip().endswith("}"):
         return text.strip()
     return None
+
+def format_order_summary(order_json):
+    """Format the order JSON into a human-readable summary"""
+    summary = "🎉 **Order Complete!** Here's your delicious order summary:\n\n"
+    
+    # Pizza section
+    pizza = order_json.get('pizza', {})
+    if pizza:
+        summary += f"🍕 **Pizza:** {pizza.get('name', 'N/A')} - €{pizza.get('price', 0):.2f}\n"
+    
+    # Extra toppings
+    extra_toppings = order_json.get('extra_toppings', [])
+    if extra_toppings:
+        summary += "\n🧄 **Extra Toppings:**\n"
+        for topping in extra_toppings:
+            summary += f"   • {topping.get('name', 'N/A')} - €{topping.get('price', 0):.2f}\n"
+    
+    # Sides
+    sides = order_json.get('sides', [])
+    if sides:
+        summary += "\n🍞 **Sides:**\n"
+        for side in sides:
+            summary += f"   • {side.get('name', 'N/A')} - €{side.get('price', 0):.2f}\n"
+    
+    # Drinks
+    drinks = order_json.get('drinks', [])
+    if drinks:
+        summary += "\n🥤 **Drinks:**\n"
+        for drink in drinks:
+            size_info = f" ({drink.get('size', '')})" if drink.get('size') else ""
+            summary += f"   • {drink.get('name', 'N/A')}{size_info} - €{drink.get('price', 0):.2f}\n"
+    
+    # Dietary notes
+    dietary_notes = order_json.get('dietary_notes', '')
+    if dietary_notes and dietary_notes.strip():
+        summary += f"\n📝 **Dietary Notes:** {dietary_notes}\n"
+    
+    # Address
+    address = order_json.get('address', '')
+    if address and address.strip():
+        summary += f"\n📍 **Delivery Address:** {address}\n"
+    
+    # Payment method
+    payment_method = order_json.get('payment_method', '')
+    if payment_method and payment_method.strip():
+        payment_emoji = "💳" if payment_method.lower() == "card" else "💵"
+        summary += f"\n{payment_emoji} **Payment Method:** {payment_method.title()}\n"
+    
+    # Total
+    total = order_json.get('total_price_eur', 0)
+    summary += f"\n💰 **Total: €{total:.2f}**\n"
+    
+    summary += "\n🎉 **Your order has been processed!** The JSON details are below:"
+    
+    return summary
 
 def transcribe_audio(audio):
     """Transcribe audio using OpenAI Whisper API"""
@@ -141,16 +195,19 @@ def transcribe_audio(audio):
         print(f"Transcription error: {e}")
         return f"Sorry, I couldn't understand your voice message. Error: {str(e)}. Please try again or type your message."
 
+def update_order_display():
+    """Function to get current order for display"""
+    return CURRENT_ORDER["status"]
+
 def chat_with_pizzapal(message, history):
-    global order_complete, final_order_json
-    
+    """Chat with PizzaPal and handle order detection"""
     # Build the conversation history for OpenAI
     messages = [{"role": "system", "content": system_prompt}]
     
     # Add all previous messages from history
     for human_msg, assistant_msg in history:
         messages.append({"role": "user", "content": human_msg})
-        if assistant_msg:  # Check if assistant replied
+        if assistant_msg:
             messages.append({"role": "assistant", "content": assistant_msg})
     
     # Add the current message
@@ -164,36 +221,54 @@ def chat_with_pizzapal(message, history):
         )
         
         reply = response.choices[0].message.content
+        print(f"🤖 PizzaPal replied: {reply[:100]}...")
         
         # Check if this contains a final order JSON
         json_str = extract_json(reply)
         if json_str:
             try:
                 order_json = json.loads(json_str)
-                order_complete = True
-                final_order_json = order_json
+                print(f"✅ JSON DETECTED AND PARSED!")
+                print(f"📄 Order JSON: {json.dumps(order_json, indent=2)}")
                 
-                # Return just the JSON without extra text when order is complete
-                return reply
+                # Return both the formatted summary AND the JSON
+                formatted_summary = format_order_summary(order_json)
+                json_display = f"\n\n```json\n{json.dumps(order_json, indent=2)}\n```"
+                
+                return formatted_summary + json_display
                 
             except Exception as e:
-                print("JSON parsing error:", e)
+                print(f"❌ JSON parsing error: {e}")
+                return reply
+        else:
+            print("ℹ️ No JSON detected in response")
         
         return reply
     
     except Exception as e:
-        print(f"OpenAI API error: {e}")
+        print(f"🚨 OpenAI API error: {e}")
         return f"Sorry, I'm having trouble connecting to my pizza brain right now. Error: {str(e)}. Please try again!"
+
+def submit_message(message, history):
+    """Handle text message submission"""
+    if message.strip():
+        print(f"📝 Processing text message: {message}")
+        bot_response = chat_with_pizzapal(message, history)
+        history.append((message, bot_response))
+        return history, ""
+    return history, message
 
 def handle_voice_message(audio, history):
     """Process recorded voice message"""
     if audio is None:
-        return history, gr.update(value=None), get_final_order()
+        return history, gr.update(value=None)
     
+    print(f"🎤 Processing voice message...")
     # Transcribe the audio
     transcribed_text = transcribe_audio(audio)
     
     if transcribed_text and transcribed_text.strip() and not transcribed_text.startswith("Sorry, I couldn't"):
+        print(f"🎤 Transcribed: {transcribed_text}")
         # Process the transcribed text through the chat system
         bot_response = chat_with_pizzapal(transcribed_text, history)
         history.append((f"🎤 {transcribed_text}", bot_response))
@@ -201,30 +276,14 @@ def handle_voice_message(audio, history):
         # Handle transcription error
         history.append((f"🎤 [Voice input error]", transcribed_text))
     
-    # Return with cleared audio input
-    return history, gr.update(value=None), get_final_order()
-
-def get_final_order():
-    """Return the final order JSON formatted nicely"""
-    if final_order_json:
-        return json.dumps(final_order_json, indent=2)
-    else:
-        return "No order completed yet. Keep chatting with PizzaPal to place your order!"
+    return history, gr.update(value=None)
 
 def reset_conversation():
     """Reset the conversation and order state"""
-    global order_complete, final_order_json
-    order_complete = False
-    final_order_json = None
-    return [], gr.update(value=None), get_final_order()
-
-def submit_message(message, history):
-    """Handle text message submission"""
-    if message.strip():
-        bot_response = chat_with_pizzapal(message, history)
-        history.append((message, bot_response))
-        return history, "", get_final_order()
-    return history, message, get_final_order()
+    global CURRENT_ORDER
+    CURRENT_ORDER["status"] = "No order completed yet. Keep chatting with PizzaPal to place your order!"
+    print("🔄 Conversation and order reset!")
+    return [], gr.update(value=None)
 
 # Custom CSS for better styling
 css = """
@@ -233,27 +292,26 @@ css = """
     margin: 0 auto;
 }
 
-.chat-message {
-    padding: 10px;
-    margin: 5px 0;
-    border-radius: 10px;
-}
-
-#final-order {
-    background-color: #f0f0f0;
-    padding: 15px;
-    border-radius: 10px;
-    font-family: monospace;
-}
-
-.voice-section {
-    background-color: #f8f9fa;
-    padding: 15px;
-    border-radius: 10px;
+.order-section {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+    padding: 20px;
+    border-radius: 15px;
     margin: 10px 0;
 }
 
-/* Align button heights with textbox */
+.order-json {
+    background-color: #1e1e1e;
+    color: #f8f8f2;
+    padding: 20px;
+    border-radius: 10px;
+    font-family: 'Courier New', monospace;
+    font-size: 14px;
+    line-height: 1.4;
+    overflow-x: auto;
+    border: 2px solid #667eea;
+}
+
 button {
     height: 42px !important;
     min-height: 42px !important;
@@ -271,11 +329,13 @@ with gr.Blocks(css=css, title="🍕 PizzaPal - AI Pizza Ordering Assistant") as 
     
     Welcome to PizzaPal! I'm your friendly AI assistant ready to help you order the perfect pizza. 
     You can **type** your messages or use the **🎤 Audio** input below to speak!
+    
+    **When you complete your order, you'll get both a summary AND the JSON format in the chat!**
     """)
     
     with gr.Tab("💬 Chat with PizzaPal"):
         chatbot = gr.Chatbot(
-            height=400,
+            height=500,
             placeholder="Start chatting with PizzaPal! Try saying 'Hi' or 'I want to order a pizza'",
             show_copy_button=True
         )
@@ -300,16 +360,6 @@ with gr.Blocks(css=css, title="🍕 PizzaPal - AI Pizza Ordering Assistant") as 
                 scale=3
             )
             voice_submit_btn = gr.Button("Send Voice Message 🎤", scale=1, variant="secondary")
-    
-    with gr.Tab("🧾 Final Order"):
-        order_display = gr.Textbox(
-            label="Your Pizza Order (JSON)",
-            value="No order completed yet. Keep chatting with PizzaPal to place your order!",
-            lines=15,
-            max_lines=20,
-            elem_id="final-order"
-        )
-        refresh_order_btn = gr.Button("Refresh Order 🔄", variant="secondary")
     
     with gr.Tab("ℹ️ How to Use"):
         gr.Markdown("""
@@ -339,43 +389,52 @@ with gr.Blocks(css=css, title="🍕 PizzaPal - AI Pizza Ordering Assistant") as 
         8. **Order Confirmation** - Final chance to review and make changes
         
         ### 🧾 Final Order
-        - Once confirmed, your order will appear in the "Final Order" tab
-        - The order is saved as JSON format for easy processing
+        - When you complete your order, PizzaPal will show you:
+          - **📋 A beautiful summary** with all your order details
+          - **📄 The raw JSON format** for technical processing
+        - Both will appear directly in the chat conversation
+        - You can copy the JSON using the copy button in the chat
         
         ### Tips for Voice Input
         - Speak clearly and at a normal pace
         - Try to minimize background noise
         - If transcription seems wrong, you can always retype your message
         - Make sure your browser has microphone permissions enabled
+        
+        ### 📋 Sample Order Flow
+        1. **Start**: "Hi, I want to order a pizza"
+        2. **Choose pizza**: "I'll take a Margherita"
+        3. **Add toppings**: "Add extra mozzarella and mushrooms"
+        4. **Add sides**: "I'll also take garlic bread and a Coca-Cola"
+        5. **Dietary notes**: "No special dietary requirements"
+        6. **Address**: "123 Main Street, Apartment 4B"
+        7. **Payment**: "I'll pay with card"
+        8. **Confirm**: "Yes, finalize my order"
+        9. **Result**: You'll get both a summary and JSON in the chat!
         """)
-    
-    # Connect the events
+
+    # Event handlers - simplified without order display updates
     submit_btn.click(
-        submit_message, 
-        inputs=[msg, chatbot], 
-        outputs=[chatbot, msg, order_display]
+        submit_message,
+        inputs=[msg, chatbot],
+        outputs=[chatbot, msg]
     )
     
     msg.submit(
-        submit_message, 
-        inputs=[msg, chatbot], 
-        outputs=[chatbot, msg, order_display]
+        submit_message,
+        inputs=[msg, chatbot],
+        outputs=[chatbot, msg]
     )
     
     voice_submit_btn.click(
         handle_voice_message,
         inputs=[audio_input, chatbot],
-        outputs=[chatbot, audio_input, order_display]
+        outputs=[chatbot, audio_input]
     )
     
     clear_btn.click(
         reset_conversation,
-        outputs=[chatbot, audio_input, order_display]
-    )
-    
-    refresh_order_btn.click(
-        get_final_order,
-        outputs=order_display
+        outputs=[chatbot, audio_input]
     )
 
 if __name__ == "__main__":
